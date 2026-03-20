@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class MemoryReadTool(Tool):
     name = "memory_read"
-    description = "Read a memory file from the session's memory directory."
+    description = "Read a persistent memory file from the session's memory directory. For session-level notes only — NOT for task files like TASK.md or PLAN.json."
     parameters = {
         "type": "object",
         "properties": {
@@ -28,11 +28,11 @@ class MemoryReadTool(Tool):
 
     async def execute(self, arguments: dict[str, Any], **kwargs: Any) -> ToolResult:
         filename = arguments.get("filename", "")
-        cwd: Path | None = kwargs.get("cwd")
-        if not cwd or not filename:
-            return ToolResult(output="", error="Missing filename or cwd", return_code=1)
+        session_dir: Path | None = kwargs.get("session_dir")
+        if not session_dir or not filename:
+            return ToolResult(output="", error="Missing filename or session_dir", return_code=1)
 
-        memory_dir = cwd / "memory"
+        memory_dir = session_dir / "memory"
         filepath = memory_dir / filename
 
         # Prevent path traversal
@@ -56,7 +56,7 @@ class MemoryReadTool(Tool):
 
 class MemoryWriteTool(Tool):
     name = "memory_write"
-    description = "Write content to a memory file in the session's memory directory."
+    description = "Write content to a persistent memory file in the session's memory directory. For session-level notes only — NOT for task files like TASK.md or PLAN.json."
     parameters = {
         "type": "object",
         "properties": {
@@ -75,11 +75,11 @@ class MemoryWriteTool(Tool):
     async def execute(self, arguments: dict[str, Any], **kwargs: Any) -> ToolResult:
         filename = arguments.get("filename", "")
         content = arguments.get("content", "")
-        cwd: Path | None = kwargs.get("cwd")
-        if not cwd or not filename:
-            return ToolResult(output="", error="Missing filename or cwd", return_code=1)
+        session_dir: Path | None = kwargs.get("session_dir")
+        if not session_dir or not filename:
+            return ToolResult(output="", error="Missing filename or session_dir", return_code=1)
 
-        memory_dir = cwd / "memory"
+        memory_dir = session_dir / "memory"
         memory_dir.mkdir(exist_ok=True)
         filepath = memory_dir / filename
 

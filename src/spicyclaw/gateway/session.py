@@ -21,6 +21,7 @@ class Session:
     def __init__(self, meta: SessionMeta, base_dir: Path) -> None:
         self.meta = meta
         self.dir = base_dir / meta.id
+        self.workspace = self.dir / "workspace"
         self.context: list[Message] = []
         self.subscribers: set[Any] = set()  # WebSocket connections
         self.workloop_task: asyncio.Task[None] | None = None
@@ -107,6 +108,7 @@ class SessionManager:
         meta = SessionMeta(id=sid, model=model or self.settings.model)
         session = Session(meta, self._base_dir)
         session.dir.mkdir(parents=True, exist_ok=True)
+        session.workspace.mkdir(exist_ok=True)
         (session.dir / "memory").mkdir(exist_ok=True)
         session.save_meta()
         self.sessions[sid] = session

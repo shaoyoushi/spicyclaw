@@ -16,6 +16,21 @@ const app = createApp({
     let reconnectTimer = null;
     let autoScroll = true;
 
+    // --- Time formatting ---
+    function formatTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function formatDateTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
     // --- API helpers ---
     async function api(method, path, body) {
       const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -58,11 +73,13 @@ const app = createApp({
       for (const m of ctx) {
         if (m.role === 'system') continue;
 
+        const ts = m.ts || null;
+
         if (m.role === 'user') {
-          msgs.push({ type: 'user', content: m.content || '' });
+          msgs.push({ type: 'user', content: m.content || '', ts });
         } else if (m.role === 'assistant') {
           if (m.content) {
-            msgs.push({ type: 'assistant', content: m.content, streaming: false });
+            msgs.push({ type: 'assistant', content: m.content, streaming: false, ts });
           }
           if (m.tool_calls) {
             for (const tc of m.tool_calls) {
@@ -94,6 +111,7 @@ const app = createApp({
                 returnCode: null,
                 loading: true,
                 collapsed: false,
+                ts,
               });
             }
           }
@@ -177,6 +195,7 @@ const app = createApp({
     // --- Handle server events ---
     function handleServerEvent(event) {
       const msgs = displayMessages.value;
+      const eventTs = event.ts || (Date.now() / 1000);
 
       switch (event.type) {
         case 'chunk': {
@@ -185,7 +204,7 @@ const app = createApp({
           if (last && last.type === 'assistant' && last.streaming) {
             last.content += text;
           } else {
-            msgs.push({ type: 'assistant', content: text, streaming: true });
+            msgs.push({ type: 'assistant', content: text, streaming: true, ts: eventTs });
           }
           maybeScroll();
           break;
@@ -210,6 +229,7 @@ const app = createApp({
             returnCode: null,
             loading: true,
             collapsed: false,
+            ts: eventTs,
           });
           maybeScroll();
           break;
@@ -247,13 +267,13 @@ const app = createApp({
         }
 
         case 'system': {
-          msgs.push({ type: 'system', content: event.data.message || '' });
+          msgs.push({ type: 'system', content: event.data.message || '', ts: eventTs });
           maybeScroll();
           break;
         }
 
         case 'error': {
-          msgs.push({ type: 'error', content: event.data.message || 'Unknown error' });
+          msgs.push({ type: 'error', content: event.data.message || 'Unknown error', ts: eventTs });
           maybeScroll();
           break;
         }
@@ -281,13 +301,13 @@ const app = createApp({
       const text = inputText.value.trim();
       if (!text) return;
 
-      // Handle /commands
+      // Handle /commands — always allowed
       if (text.startsWith('/')) {
         const parts = text.slice(1).split(/\s+/, 2);
         const cmd = parts[0];
-        const args = parts[1] || '';
+        const args = text.slice(1 + cmd.length).trim();
         wsSend('command', { command: cmd, args: args });
-        displayMessages.value.push({ type: 'system', content: `> /${text.slice(1)}` });
+        displayMessages.value.push({ type: 'system', content: `> /${text.slice(1)}`, ts: Date.now() / 1000 });
         inputText.value = '';
         nextTick(() => adjustHeight());
         return;
@@ -296,15 +316,15 @@ const app = createApp({
       if (status.value === 'paused') {
         // In step mode, confirm execution
         wsSend('confirm', {});
-        displayMessages.value.push({ type: 'system', content: '> Confirmed' });
+        displayMessages.value.push({ type: 'system', content: '> Confirmed', ts: Date.now() / 1000 });
         inputText.value = '';
         nextTick(() => adjustHeight());
         return;
       }
 
-      if (status.value !== 'stopped') return;
-
-      displayMessages.value.push({ type: 'user', content: text });
+      // Allow sending messages even when running (they get queued)
+      const nowTs = Date.now() / 1000;
+      displayMessages.value.push({ type: 'user', content: text, ts: nowTs });
       wsSend('message', { content: text });
       inputText.value = '';
       nextTick(() => {
@@ -359,7 +379,7 @@ const app = createApp({
     // --- Computed ---
     const isRunning = computed(() => status.value === 'thinking' || status.value === 'executing');
     const isPaused = computed(() => status.value === 'paused');
-    const canSend = computed(() => status.value === 'stopped' || status.value === 'paused');
+    const canSend = computed(() => true);  // Always allow sending
 
     // --- Lifecycle ---
     onMounted(async () => {
@@ -393,6 +413,8 @@ const app = createApp({
       handleKeydown,
       adjustHeight,
       onScroll,
+      formatTime,
+      formatDateTime,
     };
   },
 });

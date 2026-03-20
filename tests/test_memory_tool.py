@@ -19,7 +19,7 @@ class TestMemoryWriteTool:
         (tmp_path / "memory").mkdir()
         result = await tool.execute(
             {"filename": "notes.md", "content": "hello world"},
-            cwd=tmp_path,
+            session_dir=tmp_path,
         )
         assert result.return_code == 0
         assert "11 bytes" in result.output
@@ -29,13 +29,13 @@ class TestMemoryWriteTool:
     async def test_write_creates_memory_dir(self, tool, tmp_path):
         result = await tool.execute(
             {"filename": "test.txt", "content": "data"},
-            cwd=tmp_path,
+            session_dir=tmp_path,
         )
         assert result.return_code == 0
         assert (tmp_path / "memory" / "test.txt").exists()
 
     @pytest.mark.asyncio
-    async def test_write_no_cwd(self, tool):
+    async def test_write_no_session_dir(self, tool):
         result = await tool.execute({"filename": "x.md", "content": "y"})
         assert result.return_code == 1
 
@@ -44,7 +44,7 @@ class TestMemoryWriteTool:
         (tmp_path / "memory").mkdir()
         result = await tool.execute(
             {"filename": "../escape.txt", "content": "evil"},
-            cwd=tmp_path,
+            session_dir=tmp_path,
         )
         assert result.return_code == 1
         assert "Invalid" in result.error
@@ -68,7 +68,7 @@ class TestMemoryReadTool:
         mem = tmp_path / "memory"
         mem.mkdir()
         (mem / "notes.md").write_text("hello")
-        result = await tool.execute({"filename": "notes.md"}, cwd=tmp_path)
+        result = await tool.execute({"filename": "notes.md"}, session_dir=tmp_path)
         assert result.return_code == 0
         assert result.output == "hello"
 
@@ -77,26 +77,26 @@ class TestMemoryReadTool:
         mem = tmp_path / "memory"
         mem.mkdir()
         (mem / "other.md").write_text("x")
-        result = await tool.execute({"filename": "missing.md"}, cwd=tmp_path)
+        result = await tool.execute({"filename": "missing.md"}, session_dir=tmp_path)
         assert result.return_code == 1
         assert "not found" in result.error
         assert "other.md" in result.output
 
     @pytest.mark.asyncio
-    async def test_read_no_cwd(self, tool):
+    async def test_read_no_session_dir(self, tool):
         result = await tool.execute({"filename": "x.md"})
         assert result.return_code == 1
 
     @pytest.mark.asyncio
     async def test_read_path_traversal(self, tool, tmp_path):
         (tmp_path / "memory").mkdir()
-        result = await tool.execute({"filename": "../../etc/passwd"}, cwd=tmp_path)
+        result = await tool.execute({"filename": "../../etc/passwd"}, session_dir=tmp_path)
         assert result.return_code == 1
         assert "Invalid" in result.error
 
     @pytest.mark.asyncio
     async def test_read_empty_memory_dir(self, tool, tmp_path):
         (tmp_path / "memory").mkdir()
-        result = await tool.execute({"filename": "x.md"}, cwd=tmp_path)
+        result = await tool.execute({"filename": "x.md"}, session_dir=tmp_path)
         assert result.return_code == 1
         assert "none" in result.output

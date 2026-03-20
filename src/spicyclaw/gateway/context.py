@@ -51,8 +51,11 @@ class ContextManager:
                 self.settings.max_tokens,
             )
 
-    async def full_compact(self, llm: LLMClient) -> str | None:
+    async def full_compact(self, llm: LLMClient, force: bool = False) -> str | None:
         """Compress the middle portion of context, keeping system prompt and recent rounds.
+
+        Args:
+            force: If True, compress regardless of context size (for manual /compact).
 
         Returns the summary text on success, None on failure.
         """

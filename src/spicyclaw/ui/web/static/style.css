@@ -170,13 +170,25 @@ body {
   max-width: 860px;
 }
 
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .msg-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.msg-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .msg-content {

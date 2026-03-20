@@ -46,7 +46,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "switched_yolo": ("Switched to YOLO mode — auto-executing all tool calls", "已切换到YOLO模式 — 自动执行所有工具调用"),
     "switched_step": ("Switched to Step mode — will confirm before each execution", "已切换到步进模式 — 每次执行前需确认"),
     "aborting": ("Aborting...", "正在中止..."),
-    "compact_nothing": ("Nothing to compact (context too short)", "无需压缩（上下文太短）"),
+    "compact_nothing": ("Nothing to compact (not enough messages to compress)", "无需压缩（消息太少，没有可压缩内容）"),
     "compact_nodes_nothing": ("Nothing to compact for nodes: {nodes}", "指定节点无需压缩：{nodes}"),
     "compact_summary": ("Context compressed. Summary: {summary}...", "上下文已压缩。摘要：{summary}..."),
     "compact_nodes_summary": ("Work nodes {nodes} compressed. Summary: {summary}...", "工作节点 {nodes} 已压缩。摘要：{summary}..."),
@@ -60,6 +60,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "resume_empty": ("No context to resume — nothing to do", "没有上下文可恢复"),
     "resuming": ("Resuming workloop...", "正在恢复工作循环..."),
     "busy": ("Agent is busy, please wait", "代理正忙，请稍候"),
+    "msg_queued": ("Message received — agent will see it on next step", "消息已收到 — 代理将在下一步看到"),
 }
 
 _current_lang = "en"

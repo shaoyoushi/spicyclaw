@@ -82,7 +82,8 @@ class TestCommands:
         assert "TASK.md" in result["message"]
 
     async def test_task_with_file(self, cmd_session, cmd_settings):
-        (cmd_session.dir / "TASK.md").write_text("# My Task\nDo things")
+        cmd_session.workspace.mkdir(parents=True, exist_ok=True)
+        (cmd_session.workspace / "TASK.md").write_text("# My Task\nDo things")
         result = await _handle_command(cmd_session, "task", "", None, cmd_settings)
         assert "My Task" in result["message"]
 
@@ -91,7 +92,8 @@ class TestCommands:
         assert "PLAN.json" in result["message"]
 
     async def test_plan_with_file(self, cmd_session, cmd_settings):
-        (cmd_session.dir / "PLAN.json").write_text('{"nodes": []}')
+        cmd_session.workspace.mkdir(parents=True, exist_ok=True)
+        (cmd_session.workspace / "PLAN.json").write_text('{"nodes": []}')
         result = await _handle_command(cmd_session, "plan", "", None, cmd_settings)
         assert "nodes" in result["message"]
 

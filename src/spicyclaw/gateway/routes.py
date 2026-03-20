@@ -77,7 +77,8 @@ async def _handle_command(
                 return {"message": t("compact_nodes_summary", nodes=node_ids, summary=summary[:200])}
             return {"message": t("compact_nodes_nothing", nodes=node_ids)}
         else:
-            summary = await ctx_mgr.full_compact(llm)
+            # Manual compact: force compress regardless of context size
+            summary = await ctx_mgr.full_compact(llm, force=True)
             if summary:
                 return {"message": t("compact_summary", summary=summary[:200])}
             return {"message": t("compact_nothing")}
@@ -98,13 +99,13 @@ async def _handle_command(
         }
 
     elif cmd == "task":
-        task_file = session.dir / "TASK.md"
+        task_file = session.workspace / "TASK.md"
         if task_file.exists():
             return {"message": task_file.read_text(encoding="utf-8")[:2000]}
         return {"message": t("no_task")}
 
     elif cmd == "plan":
-        plan_file = session.dir / "PLAN.json"
+        plan_file = session.workspace / "PLAN.json"
         if plan_file.exists():
             return {"message": plan_file.read_text(encoding="utf-8")[:2000]}
         return {"message": t("no_plan")}
@@ -134,14 +135,14 @@ async def _handle_command(
         if session.context and session.context[0].role == Role.USER:
             # No system prompt yet — insert
             from spicyclaw.gateway.workloop import SYSTEM_PROMPT
-            base = SYSTEM_PROMPT.format(work_dir=session.dir)
+            base = SYSTEM_PROMPT.format(work_dir=session.workspace)
             session.context.insert(0, Message(
                 role=Role.SYSTEM,
                 content=f"{role.system_prompt}\n\n{base}" if role.system_prompt else base,
             ))
         elif session.context and session.context[0].role == Role.SYSTEM:
             from spicyclaw.gateway.workloop import SYSTEM_PROMPT
-            base = SYSTEM_PROMPT.format(work_dir=session.dir)
+            base = SYSTEM_PROMPT.format(work_dir=session.workspace)
             session.context[0] = Message(
                 role=Role.SYSTEM,
                 content=f"{role.system_prompt}\n\n{base}" if role.system_prompt else base,
@@ -271,11 +272,15 @@ def setup_routes(
                     if not content:
                         continue
                     if session.workloop_task and not session.workloop_task.done():
+                        # Allow sending messages while workloop is running —
+                        # add to context so the agent sees it on next LLM call
+                        msg = Message(role=Role.USER, content=content)
+                        session.add_message(msg)
                         await websocket.send_text(
                             ServerEvent(
-                                type="error",
+                                type="system",
                                 session_id=session_id,
-                                data={"message": t("busy")},
+                                data={"message": t("msg_queued")},
                             ).model_dump_json()
                         )
                         continue

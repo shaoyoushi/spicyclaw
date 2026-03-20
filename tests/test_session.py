@@ -36,6 +36,8 @@ class TestSessionManager:
         assert session.dir.exists()
         assert (session.dir / "session.json").exists()
         assert (session.dir / "memory").is_dir()
+        assert session.workspace.exists()
+        assert session.workspace == session.dir / "workspace"
 
     def test_create_uses_default_model(self, session_mgr: SessionManager):
         session = session_mgr.create()

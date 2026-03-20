@@ -1,6 +1,6 @@
 # SpicyClaw — Product Requirements Document
 
-> **Version**: 0.1.0
+> **Version**: 0.2.0
 > **Last Updated**: 2026-03-20
 > **Status**: v1 Implemented
 
@@ -47,6 +47,7 @@ Single-process Python application. FastAPI serves both the API gateway and the w
 │  ┌──────────────────────────────────────────┐   │
 │  │  Storage: data/sessions/{id}/            │   │
 │  │  session.json · context.json · history   │   │
+│  │  workspace/ · memory/                    │   │
 │  └──────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────┘
 ```
@@ -132,7 +133,7 @@ spicyclaw/
 
 ### 3.3 Core Models
 
-- **Message**: role, content, tool_calls[], tool_call_id, name. Serializable to OpenAI format.
+- **Message**: role, content, tool_calls[], tool_call_id, name, ts (Unix timestamp). Serializable to OpenAI format.
 - **ToolCall**: id, function_name, arguments (JSON string).
 - **ToolResult**: output, error, return_code, truncated.
 - **SessionMeta**: id, title, status, model, created_at, updated_at, token_used.
@@ -148,18 +149,20 @@ Every tool call must include two mandatory parameters, automatically injected in
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `work_node` | string | Current task node ID from the WBS plan (e.g., "2.3.1") |
-| `next_step` | string | Brief description of what the agent plans to do next |
+| `next_step` | string | Brief description of what the agent plans to do AFTER the current tool call finishes (not the current step) |
 
 These parameters are extracted by the work loop before passing remaining arguments to the tool implementation. They serve for progress tracking and UI display.
+
+**Validation**: If either `work_node` or `next_step` is missing from a tool call, the work loop returns an error to the model requiring it to retry with proper parameters. The tool is NOT executed.
 
 ### 4.2 Built-in Tools
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `shell` | `command` (string) | Execute a bash command. Supports timeout (default 120s) and output truncation (default 10,000 chars). |
+| `shell` | `command` (string) | Execute a bash command in the session's `workspace/` directory. Supports timeout (default 120s) and output truncation (default 10,000 chars). |
 | `stop` | `reason` (string) | Signal the work loop to stop. Reasons: "task complete", "need user input", etc. |
-| `memory_read` | `filename` (string) | Read a file from the session's `memory/` directory. Lists available files on not-found. Path traversal protection. |
-| `memory_write` | `filename`, `content` (strings) | Write content to a memory file. Creates the memory directory if needed. |
+| `memory_read` | `filename` (string) | Read a file from the session's `memory/` directory. For persistent session notes ONLY — not for task files. Lists available files on not-found. Path traversal protection. |
+| `memory_write` | `filename`, `content` (strings) | Write content to a memory file. For persistent session notes ONLY — not for TASK.md or PLAN.json. |
 | `summary` | `content` (string) | Record a summary (used during context compression). |
 
 ### 4.3 Skill Tools
@@ -201,7 +204,8 @@ Call LLM (with tool definitions) ──stream──► broadcast content chunks 
     │
     ▼
 Parse response
-    ├─ Has tool_calls → extract work_node/next_step → execute tools → collect results
+    ├─ Has tool_calls → validate work_node/next_step → execute tools → collect results
+    │   ├─ Missing work_node/next_step → return error to model, require retry
     │   ├─ YOLO mode → auto-continue loop
     │   └─ Step mode → pause, wait for user confirm (asyncio.Event)
     ├─ Content only (no tool_calls) → treat as conversational reply, wait for user
@@ -212,8 +216,8 @@ Parse response
 
 When the agent starts a new task, the system prompt instructs it to:
 
-1. Create `TASK.md` — first line is a short title (becomes session title), rest describes the task
-2. Create `PLAN.json` — WBS structure: `{"nodes": [{"id": "1", "title": "...", "children": [...]}]}`
+1. Use the **shell tool** to create `TASK.md` in the workspace — first line is a short title (becomes session title), rest describes the task
+2. Use the **shell tool** to create `PLAN.json` in the workspace — WBS structure: `{"nodes": [{"id": "1", "title": "...", "children": [...]}]}`. Use `jq` for precise reading and writing rather than rewriting the entire file each time.
 3. Execute the plan step by step, using `work_node` IDs from the plan
 
 ### 5.3 Protection Mechanisms
@@ -225,6 +229,7 @@ When the agent starts a new task, the system prompt instructs it to:
 | Repeated output | 10 consecutive identical outputs | Pause with warning |
 | Format errors | 5 consecutive JSON parse failures | Stop |
 | Token usage | 80% of max_tokens | Auto-compact context |
+| Missing common params | work_node or next_step absent | Return error to model |
 
 ### 5.4 Execution Modes
 
@@ -243,7 +248,9 @@ After each LLM response, the context manager updates token usage from the API's 
 
 ### 6.2 Full Compression
 
-Triggered automatically when `token_used / max_tokens ≥ full_compact_ratio` (default 0.8), or manually via `/compact`.
+**Auto-triggered** when `token_used / max_tokens ≥ full_compact_ratio` (default 0.8).
+
+**Manually triggered** via `/compact` — this forces compression regardless of current context size.
 
 1. Split context into: `[system_prompt] [middle messages...] [recent N rounds]`
 2. Convert middle messages to text
@@ -293,7 +300,7 @@ When no data is received within `idle_timeout` seconds (default 30):
 
 ### 8.1 Session Lifecycle
 
-1. **Create**: `POST /api/sessions` → new UUID, directory, metadata
+1. **Create**: `POST /api/sessions` → new UUID, directory structure, metadata
 2. **Active**: user sends messages → work loop runs → tools execute
 3. **Persist**: context and metadata saved after each work loop step
 4. **Recover**: on startup, interrupted sessions (pending tool calls without results) are detected and can be resumed via `/resume`
@@ -305,10 +312,14 @@ data/sessions/{session-id}/
 ├── session.json      # Metadata (id, title, status, model, timestamps, token_used)
 ├── context.json      # Current context window
 ├── history.jsonl     # Full message history (append-only)
-├── TASK.md           # Agent-created task description (first line = title)
-├── PLAN.json         # Agent-created WBS plan
-└── memory/           # Session-level persistent memory files
+├── workspace/        # Agent working directory (model's cwd)
+│   ├── TASK.md       # Agent-created task description (first line = title)
+│   ├── PLAN.json     # Agent-created WBS plan
+│   └── ...           # Any files the agent creates during task execution
+└── memory/           # Session-level persistent memory files (via memory tools)
 ```
+
+**Key separation**: The `workspace/` directory is the model's working directory — all shell commands execute here. TASK.md, PLAN.json, source code, and other task-related files go in workspace. Session infrastructure files (context, history, metadata) and memory files stay outside workspace. When using Docker sandbox, `workspace/` is bind-mounted to `/workspace` inside the container.
 
 ### 8.3 Recovery
 
@@ -330,16 +341,18 @@ On startup, `SessionManager.get_recoverable()` scans all sessions for those with
 | `error` | `{message}` | Error message |
 | `system` | `{message}` | System notification (protection warnings, mode changes) |
 
+All ServerEvents include `session_id` and `ts` (Unix timestamp).
+
 ### 9.2 Client → Server (ClientEvent)
 
 | Type | Data | Description |
 |------|------|-------------|
-| `message` | `{content}` | User sends a message |
+| `message` | `{content}` | User sends a message (queued if agent is running) |
 | `confirm` | `{}` | User confirms execution in step mode |
 | `abort` | `{}` | User stops current execution |
 | `command` | `{command, args}` | User issues a slash command |
 
-All events include `session_id` and timestamps.
+All ClientEvents include `session_id`.
 
 ---
 
@@ -371,7 +384,7 @@ Requires: `pip install spicyclaw[sandbox]` (installs `docker>=7.0`)
 
 ### 11.1 Container Management
 
-- `create(session_id, workspace_dir, image)` → creates a container with the session workspace bind-mounted to `/workspace`
+- `create(session_id, workspace_dir, image)` → creates a container with the session's `workspace/` directory bind-mounted to `/workspace`
 - `exec(command, timeout, workdir)` → runs a command inside the container, returns (stdout, stderr, return_code)
 - `destroy()` → stops and removes the container
 - `cleanup_stale()` → removes leftover `spicyclaw-*` containers from previous runs
@@ -386,7 +399,7 @@ Requires: `pip install spicyclaw[sandbox]` (installs `docker>=7.0`)
 
 ## 12. User Commands
 
-All commands are sent via WebSocket as `command` events. They can also be typed in the input box with a `/` prefix.
+All commands are sent via WebSocket as `command` events. They can also be typed in the input box with a `/` prefix. **Commands are available at all times**, including while the agent is running.
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
@@ -394,10 +407,10 @@ All commands are sent via WebSocket as `command` events. They can also be typed 
 | `/yolo` | — | Switch to YOLO mode (auto-execute) |
 | `/step` | — | Switch to Step mode (confirm each execution) |
 | `/stop` | — | Abort current execution |
-| `/compact` | `[node_ids]` | Compress context. Optional: comma-separated work node IDs for selective compression |
+| `/compact` | `[node_ids]` | Force compress context. Optional: comma-separated work node IDs for selective compression. Manual compact ignores context size threshold. |
 | `/status` | — | Show session status, tokens, mode, role, message count |
-| `/task` | — | Display TASK.md content |
-| `/plan` | — | Display PLAN.json content |
+| `/task` | — | Display TASK.md content (from workspace/) |
+| `/plan` | — | Display PLAN.json content (from workspace/) |
 | `/session` | `[role_name]` | Show session info, or set active role |
 | `/settings` | — | Show current configuration values |
 | `/resume` | — | Resume an interrupted work loop |
@@ -410,21 +423,25 @@ All commands are sent via WebSocket as `command` events. They can also be typed 
 
 - **Sidebar** (260px): Session list with status dots (color-coded: blue=thinking, green=executing, yellow=paused, gray=stopped). New session button.
 - **Main Area**: Chat view with auto-scroll. Message types:
-  - **User**: right-aligned bubble with blue background
-  - **Assistant**: left-aligned with border, streaming cursor animation
-  - **Tool**: compact card showing tool name, work_node badge, return code (green/red), collapsible output
-  - **System/Error**: centered, muted/red text
+  - **User**: right-aligned bubble with blue background, timestamp
+  - **Assistant**: left-aligned with border, streaming cursor animation, timestamp
+  - **Tool**: compact card showing tool name, work_node badge, return code (green/red), collapsible output, timestamp
+  - **System/Error**: centered, muted/red text, timestamp
 
 ### 13.2 Input Area
 
 - Textarea with auto-height (max 200px)
 - Enter to send, Shift+Enter for newline
 - `/command` detection — sent as command events instead of messages
-- Disabled during thinking/executing states
+- Input is **always enabled** — messages sent while the agent is running are queued and visible to the agent on its next LLM call
 - Stop button during active execution
 - Confirm + Abort buttons during paused (step mode) state
 
-### 13.3 WebSocket
+### 13.3 Timestamps
+
+All messages and events display timestamps (HH:MM:SS format). Messages include a `ts` field (Unix timestamp) for precise recording. Timestamps are shown in the user's local timezone.
+
+### 13.4 WebSocket
 
 - Auto-connect on session switch
 - 2-second reconnect on disconnect
@@ -510,9 +527,9 @@ All settings use the `SPICYCLAW_` environment variable prefix and can be set via
 
 | Category | Files | Description |
 |----------|-------|-------------|
-| Unit tests | 16 files | Mock-based tests for all modules |
+| Unit tests | 17 files | Mock-based tests for all modules |
 | Integration tests | 1 file | Real LLM API tests (context compression, workloop, health probe) |
-| Total | 193 tests | 187 unit + 6 integration |
+| Total | 217 tests | 211 unit + 6 integration |
 
 ### Running Tests
 

@@ -1,6 +1,6 @@
 # SpicyClaw — 产品需求文档
 
-> **版本**: 0.1.0
+> **版本**: 0.2.0
 > **最后更新**: 2026-03-20
 > **状态**: v1 已实现
 
@@ -47,6 +47,7 @@
 │  ┌──────────────────────────────────────────┐   │
 │  │  存储: data/sessions/{id}/               │   │
 │  │  session.json · context.json · history   │   │
+│  │  workspace/ · memory/                    │   │
 │  └──────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────┘
 ```
@@ -132,7 +133,7 @@ spicyclaw/
 
 ### 3.3 核心模型
 
-- **Message**: role, content, tool_calls[], tool_call_id, name。可序列化为 OpenAI 格式。
+- **Message**: role, content, tool_calls[], tool_call_id, name, ts（Unix 时间戳）。可序列化为 OpenAI 格式。
 - **ToolCall**: id, function_name, arguments（JSON 字符串）。
 - **ToolResult**: output, error, return_code, truncated。
 - **SessionMeta**: id, title, status, model, created_at, updated_at, token_used。
@@ -148,18 +149,20 @@ spicyclaw/
 | 参数 | 类型 | 描述 |
 |------|------|------|
 | `work_node` | string | 当前 WBS 计划中的任务节点 ID（如 "2.3.1"） |
-| `next_step` | string | Agent 下一步计划的简要描述 |
+| `next_step` | string | 当前工具调用完成后，Agent 下一步计划做什么（不是当前步骤） |
 
 这些参数由工作循环在传递给工具实现之前提取，用于进度追踪和 UI 展示。
+
+**校验**: 如果工具调用缺少 `work_node` 或 `next_step`，工作循环会向模型返回错误，要求其携带正确参数重试。该工具**不会被执行**。
 
 ### 4.2 内置工具
 
 | 工具 | 参数 | 描述 |
 |------|------|------|
-| `shell` | `command`（string） | 执行 bash 命令。支持超时（默认 120 秒）和输出截断（默认 10,000 字符）。 |
+| `shell` | `command`（string） | 在会话的 `workspace/` 目录中执行 bash 命令。支持超时（默认 120 秒）和输出截断（默认 10,000 字符）。 |
 | `stop` | `reason`（string） | 通知工作循环停止。原因如："task complete"、"need user input" 等。 |
-| `memory_read` | `filename`（string） | 从会话的 `memory/` 目录读取文件。文件不存在时列出可用文件。含路径遍历防护。 |
-| `memory_write` | `filename`, `content`（strings） | 向记忆文件写入内容。必要时创建 memory 目录。 |
+| `memory_read` | `filename`（string） | 从会话的 `memory/` 目录读取文件。仅用于持久化会话笔记，不用于任务文件。文件不存在时列出可用文件。含路径遍历防护。 |
+| `memory_write` | `filename`, `content`（strings） | 向记忆文件写入内容。仅用于持久化会话笔记，不用于 TASK.md 或 PLAN.json。 |
 | `summary` | `content`（string） | 记录摘要（用于上下文压缩过程）。 |
 
 ### 4.3 技能工具
@@ -201,7 +204,8 @@ Parse the JSON response and summarize the results.
     │
     ▼
 解析响应
-    ├─ 有 tool_calls → 提取 work_node/next_step → 执行工具 → 收集结果
+    ├─ 有 tool_calls → 校验 work_node/next_step → 执行工具 → 收集结果
+    │   ├─ 缺少 work_node/next_step → 向模型返回错误，要求重试
     │   ├─ YOLO 模式 → 自动继续循环
     │   └─ 单步模式 → 暂停，等待用户确认（asyncio.Event）
     ├─ 仅有 content（无 tool_calls）→ 视为对话回复，等待用户输入
@@ -212,8 +216,8 @@ Parse the JSON response and summarize the results.
 
 当 Agent 开始新任务时，系统提示词指示它：
 
-1. 创建 `TASK.md` — 第一行为简短标题（作为会话标题），其余描述任务内容
-2. 创建 `PLAN.json` — WBS 结构：`{"nodes": [{"id": "1", "title": "...", "children": [...]}]}`
+1. 使用 **shell 工具**在 workspace 中创建 `TASK.md` — 第一行为简短标题（作为会话标题），其余描述任务内容
+2. 使用 **shell 工具**在 workspace 中创建 `PLAN.json` — WBS 结构：`{"nodes": [{"id": "1", "title": "...", "children": [...]}]}`。推荐使用 `jq` 进行精确读写，避免每次重写整个文件。
 3. 按计划逐步执行，使用计划中的 `work_node` ID
 
 ### 5.3 保护机制
@@ -225,6 +229,7 @@ Parse the JSON response and summarize the results.
 | 重复输出 | 连续 10 次相同输出 | 暂停并警告 |
 | 格式错误 | 连续 5 次 JSON 解析失败 | 停止 |
 | Token 用量 | 超过 max_tokens 的 80% | 自动压缩上下文 |
+| 缺少公共参数 | work_node 或 next_step 缺失 | 向模型返回错误 |
 
 ### 5.4 执行模式
 
@@ -243,7 +248,9 @@ Parse the JSON response and summarize the results.
 
 ### 6.2 完整压缩
 
-当 `token_used / max_tokens ≥ full_compact_ratio`（默认 0.8）时自动触发，或通过 `/compact` 手动触发。
+**自动触发**：当 `token_used / max_tokens ≥ full_compact_ratio`（默认 0.8）时。
+
+**手动触发**：通过 `/compact` — 强制压缩，不受当前上下文大小限制。
 
 1. 将上下文分为：`[系统提示词] [中间消息...] [最近 N 轮]`
 2. 将中间消息转换为文本
@@ -293,7 +300,7 @@ Parse the JSON response and summarize the results.
 
 ### 8.1 会话生命周期
 
-1. **创建**: `POST /api/sessions` → 新 UUID、目录、元数据
+1. **创建**: `POST /api/sessions` → 新 UUID、目录结构、元数据
 2. **活跃**: 用户发送消息 → 工作循环运行 → 工具执行
 3. **持久化**: 每个工作循环步骤后保存上下文和元数据
 4. **恢复**: 启动时检测中断的会话（有未完成的工具调用），可通过 `/resume` 恢复
@@ -305,10 +312,14 @@ data/sessions/{session-id}/
 ├── session.json      # 元数据（id, title, status, model, timestamps, token_used）
 ├── context.json      # 当前上下文窗口
 ├── history.jsonl     # 完整消息历史（仅追加）
-├── TASK.md           # Agent 创建的任务描述（第一行 = 标题）
-├── PLAN.json         # Agent 创建的 WBS 计划
-└── memory/           # 会话级持久记忆文件
+├── workspace/        # Agent 工作目录（模型的 cwd）
+│   ├── TASK.md       # Agent 创建的任务描述（第一行 = 标题）
+│   ├── PLAN.json     # Agent 创建的 WBS 计划
+│   └── ...           # Agent 在任务执行过程中创建的其他文件
+└── memory/           # 会话级持久记忆文件（通过 memory 工具）
 ```
+
+**关键分离**: `workspace/` 目录是模型的工作目录 — 所有 shell 命令在此执行。TASK.md、PLAN.json、源代码和其他任务相关文件放在 workspace 中。会话基础设施文件（上下文、历史、元数据）和记忆文件保持在 workspace 之外。使用 Docker 沙箱时，`workspace/` 被挂载为容器内的 `/workspace`。
 
 ### 8.3 恢复
 
@@ -330,16 +341,18 @@ data/sessions/{session-id}/
 | `error` | `{message}` | 错误信息 |
 | `system` | `{message}` | 系统通知（保护警告、模式切换等） |
 
+所有 ServerEvent 包含 `session_id` 和 `ts`（Unix 时间戳）。
+
 ### 9.2 客户端 → 服务端（ClientEvent）
 
 | 类型 | 数据 | 描述 |
 |------|------|------|
-| `message` | `{content}` | 用户发送消息 |
+| `message` | `{content}` | 用户发送消息（Agent 运行中时排队等待） |
 | `confirm` | `{}` | 用户在单步模式中确认执行 |
 | `abort` | `{}` | 用户停止当前执行 |
 | `command` | `{command, args}` | 用户发出斜杠命令 |
 
-所有事件包含 `session_id` 和时间戳。
+所有 ClientEvent 包含 `session_id`。
 
 ---
 
@@ -371,7 +384,7 @@ tools:
 
 ### 11.1 容器管理
 
-- `create(session_id, workspace_dir, image)` → 创建容器，将会话工作空间挂载到 `/workspace`
+- `create(session_id, workspace_dir, image)` → 创建容器，将会话的 `workspace/` 目录挂载到 `/workspace`
 - `exec(command, timeout, workdir)` → 在容器内执行命令，返回 (stdout, stderr, return_code)
 - `destroy()` → 停止并删除容器
 - `cleanup_stale()` → 清理上次运行遗留的 `spicyclaw-*` 容器
@@ -386,7 +399,7 @@ tools:
 
 ## 12. 用户命令
 
-所有命令通过 WebSocket 以 `command` 事件发送。也可在输入框中以 `/` 前缀输入。
+所有命令通过 WebSocket 以 `command` 事件发送。也可在输入框中以 `/` 前缀输入。**命令在任何时候都可用**，包括 Agent 运行中。
 
 | 命令 | 参数 | 描述 |
 |------|------|------|
@@ -394,10 +407,10 @@ tools:
 | `/yolo` | — | 切换到 YOLO 模式（自动执行） |
 | `/step` | — | 切换到单步模式（每次执行需确认） |
 | `/stop` | — | 中止当前执行 |
-| `/compact` | `[node_ids]` | 压缩上下文。可选：逗号分隔的工作节点 ID 进行选择性压缩 |
+| `/compact` | `[node_ids]` | 强制压缩上下文。可选：逗号分隔的工作节点 ID 进行选择性压缩。手动压缩不受上下文大小阈值限制。 |
 | `/status` | — | 显示会话状态、token 用量、模式、角色、消息数 |
-| `/task` | — | 显示 TASK.md 内容 |
-| `/plan` | — | 显示 PLAN.json 内容 |
+| `/task` | — | 显示 TASK.md 内容（来自 workspace/） |
+| `/plan` | — | 显示 PLAN.json 内容（来自 workspace/） |
 | `/session` | `[role_name]` | 显示会话信息，或设置活跃角色 |
 | `/settings` | — | 显示当前配置值 |
 | `/resume` | — | 恢复中断的工作循环 |
@@ -410,21 +423,25 @@ tools:
 
 - **侧边栏**（260px）：会话列表，带状态指示点（颜色编码：蓝色=思考中，绿色=执行中，黄色=已暂停，灰色=已停止）。新建会话按钮。
 - **主区域**：聊天视图，自动滚动。消息类型：
-  - **用户**：右对齐气泡，蓝色背景
-  - **助手**：左对齐，带边框，流式光标动画
-  - **工具**：紧凑卡片，显示工具名、work_node 徽章、返回码（绿/红），可折叠输出
-  - **系统/错误**：居中，灰色/红色文字
+  - **用户**：右对齐气泡，蓝色背景，带时间戳
+  - **助手**：左对齐，带边框，流式光标动画，带时间戳
+  - **工具**：紧凑卡片，显示工具名、work_node 徽章、返回码（绿/红），可折叠输出，带时间戳
+  - **系统/错误**：居中，灰色/红色文字，带时间戳
 
 ### 13.2 输入区域
 
 - 自适应高度文本区域（最大 200px）
 - Enter 发送，Shift+Enter 换行
 - `/command` 检测 — 作为命令事件发送，而非普通消息
-- 思考/执行状态下禁用输入
+- 输入框**始终可用** — Agent 运行中发送的消息会排队，Agent 在下次 LLM 调用时可见
 - 执行期间显示停止按钮
 - 暂停（单步模式）时显示确认 + 中止按钮
 
-### 13.3 WebSocket
+### 13.3 时间戳
+
+所有消息和事件都显示时间戳（HH:MM:SS 格式）。消息包含 `ts` 字段（Unix 时间戳）用于精确记录。时间戳以用户本地时区显示。
+
+### 13.4 WebSocket
 
 - 切换会话时自动连接
 - 断开后 2 秒重连
@@ -510,9 +527,9 @@ tools:
 
 | 分类 | 文件数 | 描述 |
 |------|--------|------|
-| 单元测试 | 16 个文件 | 所有模块的 Mock 测试 |
+| 单元测试 | 17 个文件 | 所有模块的 Mock 测试 |
 | 集成测试 | 1 个文件 | 真实 LLM API 测试（上下文压缩、工作循环、健康探测） |
-| 合计 | 193 个测试 | 187 单元 + 6 集成 |
+| 合计 | 217 个测试 | 211 单元 + 6 集成 |
 
 ### 运行测试
 

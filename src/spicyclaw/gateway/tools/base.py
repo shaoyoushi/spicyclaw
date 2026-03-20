@@ -12,11 +12,11 @@ from spicyclaw.common.types import ToolResult
 COMMON_PARAMS = {
     "work_node": {
         "type": "string",
-        "description": "当前正在执行的工作节点编号，如 '2.3.1'",
+        "description": "Current task node ID from the WBS plan, e.g. '2.3.1'",
     },
     "next_step": {
         "type": "string",
-        "description": "下一步打算做什么",
+        "description": "What you plan to do AFTER this tool call finishes (not the current step)",
     },
 }
 

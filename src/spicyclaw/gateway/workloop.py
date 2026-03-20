@@ -27,14 +27,18 @@ You are SpicyClaw, an AI agent that completes tasks by executing shell commands.
 - **stop**: Stop execution. Parameter: `reason` (string). Call this when the task is complete or you need user input.
 
 ## Rules
-1. Every tool call MUST include `work_node` (current task node ID, e.g. "1.2") and `next_step` (brief description of what you'll do next).
+1. Every tool call MUST include `work_node` (current task node ID, e.g. "1.2") and `next_step` (brief description of what you plan to do AFTER the current tool call finishes — NOT the current step).
 2. When starting a new task:
-   a. First, create `TASK.md` — first line is a short title, rest describes the task.
-   b. Then create `PLAN.json` — a WBS plan, format: `{{"nodes": [{{"id": "1", "title": "...", "children": [...]}}, ...]}}`
+   a. First, use the shell tool to create `TASK.md` — first line is a short title, rest describes the task.
+   b. Then use the shell tool to create `PLAN.json` — a WBS plan, format: `{{"nodes": [{{"id": "1", "title": "...", "children": [...]}}, ...]}}`
+      Use `jq` for precise reading and writing of PLAN.json rather than rewriting the entire file each time.
    c. Execute the plan step by step, using work_node IDs from your plan.
 3. Call `stop` with reason "task complete" when done, or "need user input" when you need clarification.
 4. Always check command output before proceeding. Fix errors before moving on.
 5. Working directory: {work_dir}
+   All your files (TASK.md, PLAN.json, source code, etc.) should be created in this directory.
+   Do NOT create files outside this directory unless explicitly asked.
+6. The memory_read and memory_write tools are for persistent session memory ONLY — do NOT use them to create task files like TASK.md or PLAN.json. Use shell commands for that.
 """
 
 
@@ -90,11 +94,14 @@ async def run_workloop(
     format_error_count = 0
     max_format_errors = 5
 
+    # Ensure workspace exists
+    session.workspace.mkdir(parents=True, exist_ok=True)
+
     # Ensure system prompt is present
     if not session.context or session.context[0].role != Role.SYSTEM:
         system_msg = Message(
             role=Role.SYSTEM,
-            content=SYSTEM_PROMPT.format(work_dir=session.dir),
+            content=SYSTEM_PROMPT.format(work_dir=session.workspace),
         )
         session.context.insert(0, system_msg)
 
@@ -125,7 +132,7 @@ async def run_workloop(
                         ))
 
             if session.abort_event.is_set():
-                await _broadcast_system(session, "Task aborted by user")
+                await _broadcast_system(session, t("aborted"))
                 break
 
             # Update token tracking
@@ -166,7 +173,7 @@ async def run_workloop(
                     await asyncio.sleep(0.1)
 
                 if session.abort_event.is_set():
-                    await _broadcast_system(session, "Task aborted by user")
+                    await _broadcast_system(session, t("aborted"))
                     break
 
             # Execute each tool call
@@ -192,9 +199,41 @@ async def run_workloop(
 
                 format_error_count = 0
 
-                # Extract common params
+                # Extract and validate common params
                 work_node = args.pop("work_node", "")
                 next_step = args.pop("next_step", "")
+
+                if not work_node or not next_step:
+                    missing = []
+                    if not work_node:
+                        missing.append("work_node")
+                    if not next_step:
+                        missing.append("next_step")
+                    error_msg = (
+                        f"ERROR: Missing required parameters: {', '.join(missing)}. "
+                        f"Every tool call MUST include 'work_node' (current task node ID) "
+                        f"and 'next_step' (what you plan to do after this call). "
+                        f"Please retry with these parameters."
+                    )
+                    tool_msg = Message(
+                        role=Role.TOOL,
+                        content=error_msg,
+                        tool_call_id=tc.id,
+                        name=tc.function_name,
+                    )
+                    session.add_message(tool_msg)
+                    await session.broadcast(ServerEvent(
+                        type="tool_end",
+                        session_id=session.id,
+                        data={
+                            "tool_call_id": tc.id,
+                            "output": "",
+                            "error": error_msg,
+                            "return_code": 1,
+                            "truncated": False,
+                        },
+                    ))
+                    continue
 
                 # Broadcast tool_call event
                 await session.broadcast(ServerEvent(
@@ -209,7 +248,7 @@ async def run_workloop(
                     },
                 ))
 
-                # Execute
+                # Execute — shell tool cwd is workspace, not session dir
                 tool = tool_registry.get(tc.function_name)
                 if tool is None:
                     result = ToolResult(
@@ -217,7 +256,7 @@ async def run_workloop(
                     )
                 else:
                     session.status = SessionStatus.EXECUTING
-                    result = await tool.execute(args, cwd=session.dir)
+                    result = await tool.execute(args, cwd=session.workspace, session_dir=session.dir)
 
                 # Broadcast tool result
                 await session.broadcast(ServerEvent(
@@ -302,7 +341,7 @@ async def _try_update_title(session: Session) -> None:
     """Read TASK.md first line as session title if not yet set."""
     if session.meta.title != "New Session":
         return
-    task_file = session.dir / "TASK.md"
+    task_file = session.workspace / "TASK.md"
     if not task_file.exists():
         return
     try:

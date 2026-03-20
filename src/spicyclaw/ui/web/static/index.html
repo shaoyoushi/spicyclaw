@@ -43,13 +43,19 @@
           >
             <!-- User message -->
             <template v-if="msg.type === 'user'">
-              <div class="msg-label">You</div>
+              <div class="msg-header">
+                <span class="msg-label">You</span>
+                <span v-if="msg.ts" class="msg-time">{{ formatTime(msg.ts) }}</span>
+              </div>
               <div class="msg-content">{{ msg.content }}</div>
             </template>
 
             <!-- Assistant message -->
             <template v-else-if="msg.type === 'assistant'">
-              <div class="msg-label">Agent</div>
+              <div class="msg-header">
+                <span class="msg-label">Agent</span>
+                <span v-if="msg.ts" class="msg-time">{{ formatTime(msg.ts) }}</span>
+              </div>
               <div class="msg-content">{{ msg.content }}<span v-if="msg.streaming" class="cursor">|</span></div>
             </template>
 
@@ -61,8 +67,9 @@
                 <span v-if="msg.returnCode !== null" :class="['tool-rc', msg.returnCode === 0 ? 'ok' : 'err']">
                   rc={{ msg.returnCode }}
                 </span>
+                <span v-if="msg.ts" class="msg-time">{{ formatTime(msg.ts) }}</span>
               </div>
-              <div v-if="msg.nextStep" class="tool-next">→ {{ msg.nextStep }}</div>
+              <div v-if="msg.nextStep" class="tool-next">Next: {{ msg.nextStep }}</div>
               <div v-if="msg.command" class="tool-command">$ {{ msg.command }}</div>
               <div v-if="msg.argsDisplay" class="tool-command">{{ msg.argsDisplay }}</div>
               <div v-if="msg.output" class="tool-output" :class="{ collapsed: msg.collapsed }" @click="msg.collapsed = !msg.collapsed">
@@ -74,12 +81,18 @@
 
             <!-- System message -->
             <template v-else-if="msg.type === 'system'">
-              <div class="msg-system">{{ msg.content }}</div>
+              <div class="msg-system">
+                <span v-if="msg.ts" class="msg-time">{{ formatTime(msg.ts) }}</span>
+                {{ msg.content }}
+              </div>
             </template>
 
             <!-- Error message -->
             <template v-else-if="msg.type === 'error'">
-              <div class="msg-error">{{ msg.content }}</div>
+              <div class="msg-error">
+                <span v-if="msg.ts" class="msg-time">{{ formatTime(msg.ts) }}</span>
+                {{ msg.content }}
+              </div>
             </template>
           </div>
         </div>
@@ -100,14 +113,13 @@
               v-model="inputText"
               @keydown="handleKeydown"
               @input="adjustHeight"
-              :placeholder="isPaused ? 'Press Confirm or type /command...' : 'Type a message... (Enter to send, Shift+Enter for newline)'"
+              :placeholder="isPaused ? 'Press Confirm or type /command...' : isRunning ? 'Type a message or /command...' : 'Type a message... (Enter to send, Shift+Enter for newline)'"
               rows="1"
-              :disabled="isRunning"
             ></textarea>
             <button
               class="btn-send"
               @click="sendMessage"
-              :disabled="!inputText.trim() || !canSend"
+              :disabled="!inputText.trim()"
             >Send</button>
           </div>
           <div v-if="!wsConnected" class="ws-status">Disconnected — reconnecting...</div>

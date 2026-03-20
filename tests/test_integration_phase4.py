@@ -76,11 +76,11 @@ class TestIntegrationPhase4:
 
         result = await write_tool.execute(
             {"filename": "test.md", "content": "hello from integration test"},
-            cwd=tmp_path,
+            session_dir=tmp_path,
         )
         assert result.return_code == 0
 
-        result = await read_tool.execute({"filename": "test.md"}, cwd=tmp_path)
+        result = await read_tool.execute({"filename": "test.md"}, session_dir=tmp_path)
         assert result.return_code == 0
         assert result.output == "hello from integration test"
 

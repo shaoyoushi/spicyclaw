@@ -304,7 +304,7 @@ class TestWorkloop:
             id="tc_1",
             function_name="shell",
             arguments=json.dumps({
-                "command": f"echo '# My Cool Task\nDetails here' > {session.dir}/TASK.md",
+                "command": f"echo '# My Cool Task\nDetails here' > {session.workspace}/TASK.md",
                 "work_node": "1",
                 "next_step": "create plan",
             }),
