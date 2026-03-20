@@ -1,0 +1,1 @@
+"""SpicyClaw - Lightweight AI Agent."""

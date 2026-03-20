@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpicyClaw</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>SpicyClaw</h1>
+        <button class="btn-icon" @click="createSession" title="New Session">+</button>
+      </div>
+      <div class="session-list">
+        <div
+          v-for="s in sessions"
+          :key="s.id"
+          :class="['session-item', { active: s.id === currentSessionId }]"
+          @click="switchSession(s.id)"
+        >
+          <span class="session-title">{{ s.title }}</span>
+          <span :class="['status-dot', s.status]"></span>
+        </div>
+        <div v-if="sessions.length === 0" class="empty-hint">No sessions yet</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div v-if="!currentSessionId" class="welcome">
+        <h2>Welcome to SpicyClaw</h2>
+        <p>Create a new session to get started.</p>
+        <button class="btn-primary" @click="createSession">New Session</button>
+      </div>
+
+      <template v-else>
+        <div class="chat-view" ref="chatView" @scroll="onScroll">
+          <div
+            v-for="(msg, i) in displayMessages"
+            :key="i"
+            :class="['message', 'msg-' + msg.type]"
+          >
+            <!-- User message -->
+            <template v-if="msg.type === 'user'">
+              <div class="msg-label">You</div>
+              <div class="msg-content">{{ msg.content }}</div>
+            </template>
+
+            <!-- Assistant message -->
+            <template v-else-if="msg.type === 'assistant'">
+              <div class="msg-label">Agent</div>
+              <div class="msg-content">{{ msg.content }}<span v-if="msg.streaming" class="cursor">|</span></div>
+            </template>
+
+            <!-- Tool call -->
+            <template v-else-if="msg.type === 'tool'">
+              <div class="tool-header">
+                <span class="tool-name">{{ msg.name }}</span>
+                <span v-if="msg.workNode" class="tool-node">{{ msg.workNode }}</span>
+                <span v-if="msg.returnCode !== null" :class="['tool-rc', msg.returnCode === 0 ? 'ok' : 'err']">
+                  rc={{ msg.returnCode }}
+                </span>
+              </div>
+              <div v-if="msg.nextStep" class="tool-next">→ {{ msg.nextStep }}</div>
+              <div v-if="msg.command" class="tool-command">$ {{ msg.command }}</div>
+              <div v-if="msg.argsDisplay" class="tool-command">{{ msg.argsDisplay }}</div>
+              <div v-if="msg.output" class="tool-output" :class="{ collapsed: msg.collapsed }" @click="msg.collapsed = !msg.collapsed">
+                <pre>{{ msg.collapsed ? msg.output.slice(0, 200) + '...' : msg.output }}</pre>
+              </div>
+              <div v-if="msg.error" class="tool-error"><pre>{{ msg.error }}</pre></div>
+              <div v-if="msg.loading" class="tool-loading">Running...</div>
+            </template>
+
+            <!-- System message -->
+            <template v-else-if="msg.type === 'system'">
+              <div class="msg-system">{{ msg.content }}</div>
+            </template>
+
+            <!-- Error message -->
+            <template v-else-if="msg.type === 'error'">
+              <div class="msg-error">{{ msg.content }}</div>
+            </template>
+          </div>
+        </div>
+
+        <div class="input-area">
+          <div v-if="isRunning" class="stop-bar">
+            <span class="status-text">{{ status === 'thinking' ? 'Thinking...' : 'Executing...' }}</span>
+            <button class="btn-stop" @click="abort">Stop</button>
+          </div>
+          <div v-if="isPaused" class="stop-bar">
+            <span class="status-text paused">Step mode — waiting for confirmation</span>
+            <button class="btn-confirm" @click="confirm">Confirm</button>
+            <button class="btn-stop" @click="abort">Abort</button>
+          </div>
+          <div class="input-box">
+            <textarea
+              ref="inputEl"
+              v-model="inputText"
+              @keydown="handleKeydown"
+              @input="adjustHeight"
+              :placeholder="isPaused ? 'Press Confirm or type /command...' : 'Type a message... (Enter to send, Shift+Enter for newline)'"
+              rows="1"
+              :disabled="isRunning"
+            ></textarea>
+            <button
+              class="btn-send"
+              @click="sendMessage"
+              :disabled="!inputText.trim() || !canSend"
+            >Send</button>
+          </div>
+          <div v-if="!wsConnected" class="ws-status">Disconnected — reconnecting...</div>
+        </div>
+      </template>
+    </main>
+  </div>
+
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
